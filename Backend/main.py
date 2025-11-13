@@ -1,53 +1,78 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import os, time
+from db import get_db_connection  # ✅ import DB connection
 
 app = Flask(__name__)
 CORS(app)
 
-# ✅ Sample Database for Plant Info
-plant_data = {
-    "Rice": {
-        "description": "Rice is a major cereal crop affected by blast, bacterial leaf blight, etc.",
-        "recommendations": [
-            {"name": "Use resistant varieties"},
-            {"name": "Apply Tricyclazole for blast control"}
-        ]
-    },
-    "Wheat": {
-        "description": "Wheat diseases include rust, smut, and powdery mildew.",
-        "recommendations": [
-            {"name": "Use fungicides such as Mancozeb"},
-            {"name": "Avoid waterlogging and use crop rotation"}
-        ]
-    },
-    "Tomato": {
-        "description": "Tomato is commonly affected by early blight, late blight, and leaf curl virus.",
-        "recommendations": [
-            {"name": "Apply Copper Oxychloride"},
-            {"name": "Use virus-free seedlings"}
-        ]
-    },
-    "Potato": {
-        "description": "Potato suffers from late blight, black scurf, and viral diseases.",
-        "recommendations": [
-            {"name": "Spray Metalaxyl for late blight"},
-            {"name": "Use certified seed potatoes"}
-        ]
-    }
-}
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ✅ API to get plant info
-@app.route('/plant-info', methods=['GET'])
-def plant_info():
-    plant_name = request.args.get('plant')
-    if not plant_name:
-        return jsonify({"error": "No plant specified"}), 400
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "Flask server is running!"})
 
-    info = plant_data.get(plant_name)
-    if not info:
-        return jsonify({"error": f"No data available for {plant_name}"}), 404
+@app.route("/api/upload", methods=["POST"])
+def upload_image():
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
 
-    return jsonify(info)
+    image = request.files["image"]
+    user_id = 1  # ✅ Temporary user_id for now
+
+    # Save file
+    filename = f"{user_id}_{int(time.time())}.jpg"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    image.save(filepath)
+
+    # ✅ Save upload info in MySQL
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    sql = "INSERT INTO uploads (user_id, image_url, status) VALUES (%s, %s, %s)"
+    cursor.execute(sql, (user_id, filename, "pending"))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({
+        "message": "Image uploaded successfully",
+        "file_url": f"http://localhost:5000/{filepath}"
+    })
+
+@app.route("/detect", methods=["POST"])
+def detect_disease():
+    try:
+        if "image" not in request.files:
+            return jsonify({"error": "No image found"}), 400
+
+        image = request.files["image"]
+
+        result = {
+            "disease": "Late Blight",
+            "confidence": 92.5,
+            "solution": "Use Mancozeb or Copper-based fungicide. Remove infected leaves."
+        }
+
+        # ✅ Store result in DB
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO analysis_results (user_id, plant_name, disease_detected, confidence, suggestion)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (1, "Potato", result["disease"], result["confidence"], result["solution"]))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(result)
+
+    except Exception as e:
+        print("🔥 Error in /detect:", e)
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
